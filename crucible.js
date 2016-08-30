@@ -1,6 +1,8 @@
 var blitzen = require('./blitzen');
 var fs = require('fs');
 var os = require('os');
+//var async = require('asyncawait/async');
+//var await = require('asyncawait/await');
 
 readEntitiesFromFile = function(
 	entitiesFilePath)
@@ -15,10 +17,15 @@ readEntitiesFromFile = function(
 			&& 	entities.group_id
 			&&	entities.project_id)
 		{
-			console.log('Successfully read entities.'); 
-			console.log("organization_id: " + entities.organization_id);
-			console.log("group_id: " + entities.group_id);
-			console.log("project_id: " + entities.project_id);
+			console.log(
+				"Successfully read entities."
+				+ "\n\torganization_id: " 
+				+ entities.organization_id
+				+ "\n\tgroup_id: " 
+				+ entities.group_id
+				+ "\n\tproject_id: " 
+				+ entities.project_id
+				+ "\n");
 		}
 		else
 		{
@@ -58,35 +65,30 @@ var credentialsFilePath =
 
 var database = new blitzen.Database(credentialsFilePath);
 
-database.connect()
-.then(
-	function(result)
-	{
-		//Add 2 data points with randomly selected values
-		var params = 
+//Add 2 data points with randomly selected values
+var params = 
+{
+	organizationId: entities.organization_id,
+	groupId: entities.group_id,
+	projectId: entities.project_id,
+	readingList: 
+	[
 		{
-			organizationId: entities.organization_id,
-			groupId: entities.group_id,
-			projectId: entities.project_id,
-			readingList: 
-			[
-				{
-					sensorId: 'exampleSensorId',
-					ts: new Date().toISOString(),
-					val: Math.random()
-				},
-				{
-					sensorId: 'exampleSensorId',
-					ts: new Date().toISOString(),
-					val: Math.random()
-				}
-			]
+			sensorId: 'exampleSensorId',
+			ts: new Date().toISOString(),
+			val: Math.random()
+		},
+		{
+			sensorId: 'exampleSensorId',
+			ts: new Date().toISOString(),
+			val: Math.random()
 		}
+	]
+}
 
-		// By not returning the Promise returned from postReadings(), we allow
-		// the app to proceed into the following .then() immediately.
-		database.postReadings(params);
-	})
+// By not returning the Promise returned from postReadings(), we allow
+// the app to proceed into the following .then() immediately.
+database.postReadings(params)
 .then(
 	function(result)
 	{

@@ -5,11 +5,126 @@ var oxygen = require('./oxygen');
 var path = require('path');
 var Promise = require("bluebird");
 var util = require('util');
+const assert = require('assert');
 
 //TODO: Create this library as a npm module ? (TBD)
 
 const DEFAULT_API_URL = 'https://projectdasher-staging.api.autodesk.com';
 const V1_SIMPLE_READINGS_ENDPOINT = '/api/v1/projects/{projectId}/readings';
+
+function Request(
+	method,
+	url, 
+	params,
+	database)
+{
+	assert(database);
+
+	this.method = method;
+	this.url = url;
+	this.params = params;
+	this.database = database;
+	this.firstAttempt = true;
+}
+
+Request.prototype.onSuccess = function(
+	serverResponse)
+{
+	console.log("Request succeeded.\n");
+	return serverResponse;
+}
+
+Request.prototype.onFailure = function(
+	serverResponse)
+{
+	if (	(serverResponse.response.statusMessage == 'Unauthorized')
+		&&	(this.firstAttempt))
+	{
+		// The request failed, probably due to an invalid access token.
+		// This is the first failure of this request. 
+		// We will obtain a new access token and attempt the same request
+		// again. If it fails again for the same reason, we will not attempt
+		// it again. 
+		
+		this.firstAttempt = false;
+
+		console.log('Data360 API request was unauthorized.');
+		console.log('Attempting to obtain new access token.');
+
+		var thisObj = this;
+
+		return this.database.authenticator.obtainAccessToken()
+			.then(
+				function() {return thisObj.send()})
+			.then(
+				function(successResult) 
+					{return thisObj.onSuccess(successResult)}, 
+				function(failureResult) 
+					{return thisObj.onFailure(failureResult)});
+	}
+	else
+	{
+		return serverResponse;
+	}
+}
+
+Request.prototype.options = function()
+{
+	var options = 
+	{
+		method: this.method,
+		url: this.url,
+		headers:
+		{
+			'cache-control': 'no-cache',
+			'Accept': 'application/json',
+			'Authorization': 'Bearer ' 
+				+ this.database.authenticator.accessToken() 
+		},
+		json: true,
+	};
+
+	if (this.method === 'GET')
+	{
+		options.qs = this.params;
+	}
+	else
+	{
+		options.body = this.params;
+	}
+
+	return options;
+}
+
+Request.prototype.send = function()
+{
+	var thisObj = this;
+
+
+	return this.database.authenticator.refreshAccessToken()
+		.then(
+			function()
+			{
+				console.log(
+					thisObj.method
+					+ " "
+					+ thisObj.url);
+				return httpRequest(thisObj.options())
+			},
+			function()
+			{
+				console.log("failure")
+			})
+		.then(
+			function(successResult) 
+			{
+				return thisObj.onSuccess(successResult)
+			}, 
+			function(failureResult) 
+			{
+				return thisObj.onFailure(failureResult)
+			});
+}
 
 function Database(
 	credentialsFilePath,
@@ -45,168 +160,31 @@ Database.prototype.readingsUrl = function()
 	return (this.apiUrl + V1_SIMPLE_READINGS_ENDPOINT);
 }
 
-
-Database.prototype.tryRequest = function(
-	method, 
-	url,
-	params)
-{
-	console.log('\n' + method + ": " + url);
-
-	var options = 
-	{
-		method: method,
-		url: url,
-		headers:
-		{
-			'cache-control': 'no-cache',
-			'Accept': 'application/json',
-			'Authorization': 'Bearer ' + this.authenticator.accessToken() 
-		},
-		json: true,
-	};
-
-	console.log("token: " + this.authenticator.accessToken());
-
-	if (method === 'GET')
-	{
-		options.qs = params;
-	}
-	else
-	{
-		options.body = params;
-	}
-
-	return new Promise(
-		function(successFn, failureFn) 
-		{
-			httpRequest(options)
-				.then(
-					function(successResult) 
-					{
-						console.log(method + ' request succeeded.');
-						console.log(successResult);
-						successFn(successResult);
-					},
-					function(failureResult) 
-					{
-						console.log(
-							method 
-							+ ' request failed: ' 
-							+ failureResult.response.statusCode
-							+ " ("
-							+ failureResult.response.statusMessage
-							+ "): "
-							+ failureResult.response.body);
-						failureFn(failureResult);
-					})
-				.catch(
-					errors.StatusCodeError, 
-					function(failureResult) 
-					{
-						failureFn(failureResult);
-					})
-		});
-}
-	
-Database.prototype.retryRequest = function(
-	method,
-	url,
-	params)
-{
-	var thisObj = this;
-
-	this.authenticator.obtainAccessToken()
-	.then(
-		function(successResult)
-		{
-			return thisObj.tryRequest(method, url, params);
-		},
-		function(failureResult)
-		{
-		});
-}
-	
-Database.prototype.request = function(
-	method, 
-	url,
-	params)
-{
-	console.log("request()");
-	var thisObj = this;
-
-	this.authenticator.refreshAccessToken()
-	.then(
-		thisObj.tryRequest(method, url, params)
-		.then(
-			function successFn(successResult)
-			{
-				return new Promise(
-					function(successFn, failureFn) 
-					{
-						successFn(successResult);
-					});
-			},
-			function(failureResult)
-			{
-				if (failureResult.response.statusMessage == 'Unauthorized')
-				{
-					console.log('Attempting to obtain new access token.');
-					return thisObj.retryRequest(method, url, params);
-				}
-				else
-				{
-					return new Promise(
-						function(successFn, failureFn) 
-						{
-							failureFn(failureResult);
-						});
-				}
-			})
-		);
-}
-
 Database.prototype.getRequest = function(
 	url,
 	params)
 {
-	var options = 
-	{
-		method: 'GET',
-		url: url,
-		qs: params,
-	};
+	var request = new Request('GET', url, params, this);
 
-	return this.request('GET', url, params);
+	return request.send();
 }
-
 
 Database.prototype.postRequest = function(
 	url,
 	params)
 {
-	var options = 
-	{
-		method: 'POST',
-		url: url,
-		body: params,
-	};
+	var request = new Request('POST', url, params, this);
 
-	return this.request('POST', url, params);
+	return request.send();
 }
 
 Database.prototype.deleteRequest = function(
 	url,
 	params)
 {
-	var options = 
-	{
-		method: 'DELETE',
-		url: url,
-		body: params,
-	};
+	var request = new Request('DELETE', url, params, this);
 
-	return this.request('DELETE', url, params);
+	return request.send();
 }
 
 Database.prototype.getReadings = function(
